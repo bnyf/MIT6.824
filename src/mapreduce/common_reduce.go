@@ -1,5 +1,18 @@
 package mapreduce
 
+import (
+	"encoding/json"
+	"io"
+	"sort"
+	"os"
+	"log"
+)
+
+type ByKey []KeyValue
+func (a ByKey) Len() int { return len(a) }
+func (a ByKey) Swap(i, j int) { a[i],a[j] = a[j],a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 func doReduce(
 	jobName string, // the name of the whole MapReduce job
 	reduceTask int, // which reduce task this is
@@ -44,4 +57,64 @@ func doReduce(
 	//
 	// Your code here (Part I).
 	//
+
+	//read kv slice from the json file
+	var kvSlice []KeyValue
+	for i := 0;i<nMap;i++{
+		//file, _ := os.OpenFile(reduceName(jobName,i,reduceTaskNumber), os.O_RDONLY, 0666)
+		file,err := os.Open(reduceName(jobName,i,reduceTask))
+		if err != nil {
+			log.Fatal("doReduce: open ", err)
+		}
+		var kv KeyValue
+		dec := json.NewDecoder(file)
+		for{
+			err := dec.Decode(&kv)
+			kvSlice = append(kvSlice,kv)
+			if err == io.EOF {
+				break
+			}
+		}
+		file.Close()
+		/********/
+		//此处如果用 defer，可能会造成文件开启过多，造成程序崩溃
+		/********/
+	}
+
+	//sort the intermediate kv slices by key
+	sort.Sort(ByKey(kvSlice))
+
+	//process kv slices in the reduceF()
+	var reduceFValue []string
+	var outputKv []KeyValue
+	var preKey string = kvSlice[0].Key
+	for i,kv := range kvSlice{
+		if i == (len(kvSlice) - 1) {
+			reduceFValue = append(reduceFValue, kv.Value)
+			outputKv = append(outputKv, KeyValue{preKey, reduceF(preKey, reduceFValue)})
+		} else {
+			if kv.Key != preKey {
+				outputKv = append(outputKv, KeyValue{preKey, reduceF(preKey, reduceFValue)})
+				reduceFValue = make([]string, 0)
+			}
+			reduceFValue = append(reduceFValue, kv.Value)
+		}
+
+		preKey = kv.Key
+	}
+
+	//write the reduce output as JSON encoded kv objects to the file named outFile
+	file,err := os.Create(outFile)
+	if err != nil {
+		log.Fatal("doRuduce: create ", err)
+	}
+	defer file.Close()
+
+	enc := json.NewEncoder(file)
+	for _, kv := range outputKv{
+		err := enc.Encode(&kv)
+		if err != nil {
+			log.Fatal("doRuduce: json encode ", err)
+		}
+	}
 }
